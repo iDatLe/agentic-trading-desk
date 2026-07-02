@@ -159,11 +159,29 @@ Once loaded, Claude Code will:
 ### 3. Example Workflow
 ```
 You: "Analyze AAPL for a potential entry"
-→ Claude fetches AAPL historicals via Robinhood MCP
-→ Runs: python3 scripts/indicators.py (raw indicators)
-→ Runs: python3 scripts/score.py (three-pillar scorecard + decision)
-→ Returns: Scorecard, flags, and suggested action (RE-ENTRY, HOLD, EXIT, etc.)
-→ You confirm before any execution
+
+1. Data Fetching (Robinhood MCP)
+   → Fetches AAPL daily historicals (~290 bars for EMA 200)
+   → Fetches live quote (current price / last close)
+   → Checks if there is an open position → sets holding = true/false
+
+2. Macro Pillar (once per session, shared across all tickers)
+   → Fetches historicals for 7 ETFs: SPY, RSP, IWM, HYG, LQD, TLT, XLY, XLP
+   → Retrieves 10Y-2Y yield spread from Investing.com
+   → Runs: python3 scripts/macro_pillar.py → macro_score (-2 to +2)
+
+3. Ticker Scoring
+   → Assembles JSON with {symbol, close, macro_score, holding}
+   → Runs: python3 scripts/score.py → three-pillar scorecard + decision
+     (score.py calls indicators.py internally for all calculations)
+
+4. Qualitative Context (reinforcement, does not alter scores)
+   → News and macro context from Investing.com
+   → Analyst consensus and price targets from Google Finance
+
+5. Presentation and Confirmation
+   → Returns: Scorecard, flags, and suggested action (RE-ENTRY, HOLD, EXIT, etc.)
+   → You review and confirm before any order execution
 ```
 
 The agent operates under the principle: **AI fetches data and presents analysis; scripts perform deterministic calculations; you decide and approve all executions.**
