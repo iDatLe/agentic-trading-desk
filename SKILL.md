@@ -9,8 +9,11 @@ description: >-
   explicitly name the skill. Compute all indicators using deterministic code
   (never by eye) from raw Robinhood bars, apply the exit-on-exhaustion /
   re-enter-on-rebound logic, and respect account guardrails. On the Agentic
-  (cash) account, execute trades autonomously (no per-order confirmation), but
-  only after every proposed order passes the deterministic `risk_guard.py` gate.
+  (cash) account, execute equity and options trades autonomously (no per-order
+  confirmation), but only after every proposed order passes the deterministic
+  `risk_guard.py` gate. This is a daily-bar SWING system: run once per day after
+  the close (optionally once near the open for risk management); do not overtrade
+  intraday. Options are defined-risk only by default (no naked shorts).
 ---
 
 # Agentic Trading Desk
@@ -88,6 +91,34 @@ where `order.json` is:
 }
 ```
 The gate returns `APPROVE`/`REJECT`, the size it clamped to (`approved.quantity`), and the reasons. Exit code is `0` on APPROVE and `2` on REJECT. I place the order only on APPROVE, sized to `approved.quantity`, via `review_*_order` → `place_*_order`. The `enabled` flag is the master kill switch.
+
+**Options orders** use the same gate with `asset_class: "option"`:
+```json
+{
+  "proposal": {"symbol": "AAPL", "asset_class": "option", "action": "buy_to_open",
+               "option_type": "call", "strike": 210, "premium": 4.50,
+               "expiration": "2026-09-18", "today": "2026-07-14", "contracts": 5},
+  "account": {"portfolio_value": 50000, "settled_cash": 8000, "positions": {}},
+  "config": {"enabled": true, "max_trade_pct": 0.10, "max_option_premium_pct": 0.05,
+             "min_days_to_expiry": 21, "allow_uncovered_options": false,
+             "max_concurrent_positions": 6, "open_positions_count": 2}
+}
+```
+Rules the gate enforces for options (I never bypass them):
+- **Long options** (`buy_to_open`/`buy_to_close`) are defined-risk; sized so premium-at-risk ≤ `max_option_premium_pct` and ≤ `max_trade_pct` of the portfolio, and funded from settled cash.
+- **Short options** (`sell_to_open`) are undefined/large-risk and are **REJECTED by default**. Only if the user has explicitly set `allow_uncovered_options=true` AND I supply a bounded `max_loss` (i.e., a spread with defined risk) will the gate size the short against that max loss. I do not sell naked options.
+- **Expiry:** expired options are rejected; for swing trades `min_days_to_expiry` (e.g. 21) rejects contracts too close to expiration.
+- I always pass `today` (from the live session) so the gate can compute days-to-expiry offline.
+
+## Swing-Trading Cadence (How Often To Run)
+
+This desk is a **swing-trading** system built on **daily** bars (EMA20/50/200, RSI-14, MACD 12/26/9, TRIX-15, Bollinger 20). Daily indicators only change once the daily candle is final, so:
+
+- **Primary run: once per day, at or just after the close** (US market close 16:00 ET). This is when the daily bar is finalized and every indicator/decision is meaningful and stable. Generate signals and place any new entries here. This is the cadence the skill is designed for (~290 daily bars).
+- **Optional second run: once near the open** (~09:30–10:00 ET) for *risk management only* — honor stops, act on gaps, and close/trim exposure. Do not open fresh swing entries off an unfinished daily bar.
+- **More frequent intraday runs do NOT help swing trading.** Between closes the daily candle "repaints"; intraday triggers are noise that isn't confirmed until the close, and re-running invites overtrading (which `max_daily_trades` is meant to curb). If genuinely intraday signals are wanted, that is a different (day-trading) strategy needing intraday bars and a different indicator config — not this skill.
+
+**Rule of thumb:** 1×/day post-close to find and enter setups, plus at most 1×/day near the open to manage risk. Let winners ride across days; the exit trigger is exhaustion, not the clock.
 
 ## Three-Pillar Framework (Standard Output Format)
 

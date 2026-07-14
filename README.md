@@ -223,4 +223,38 @@ In autonomous mode the deterministic gate — not a human prompt — enforces th
 python3 scripts/risk_guard.py order.json --json   # exit 0 = APPROVE, 2 = REJECT
 python3 scripts/risk_guard.py                      # self-test with built-in scenarios
 ```
-`order.json` = `{proposal:{symbol,side,price,quantity|notional}, account:{portfolio_value,settled_cash,positions}, config:{...limits...}}`. The agent may only place `approved.quantity` shares (never more), and only when `decision == "APPROVE"`.
+`order.json` = `{proposal:{symbol,side,price,quantity|notional}, account:{portfolio_value,settled_cash,positions}, config:{...limits...}}`. The agent may only place `approved.quantity` (never more), and only when `decision == "APPROVE"`.
+
+## 🎯 Options Trading (Defined-Risk by Default)
+
+The risk gate also bounds **options** orders via `proposal.asset_class = "option"`:
+
+```json
+{
+  "proposal": {"symbol": "AAPL", "asset_class": "option", "action": "buy_to_open",
+               "option_type": "call", "strike": 210, "premium": 4.50,
+               "expiration": "2026-09-18", "today": "2026-07-14", "contracts": 5},
+  "account": {"portfolio_value": 50000, "settled_cash": 8000, "positions": {}},
+  "config": {"max_trade_pct": 0.10, "max_option_premium_pct": 0.05,
+             "min_days_to_expiry": 21, "allow_uncovered_options": false}
+}
+```
+
+| Rule | Behavior |
+|---|---|
+| **Long options** (`buy_to_open`) | Defined risk (max loss = premium). Sized so premium ≤ `max_option_premium_pct` and ≤ `max_trade_pct` of portfolio; funded from settled cash. |
+| **Short options** (`sell_to_open`) | **Rejected by default** (undefined/large risk). Allowed only if `allow_uncovered_options=true` **and** a bounded `max_loss` (a spread) is supplied, then sized against that loss. Naked options are never sold. |
+| **Closing** (`buy_to_close`/`sell_to_close`) | Risk-reducing; clamped to `held_contracts`. |
+| **Expiry** | Expired → reject. Swing trades set `min_days_to_expiry` (e.g. 21) to avoid contracts too close to expiration. |
+
+> ⚠️ Note: the indicators in this repo (EMA/RSI/MACD/TRIX/Bollinger) are **equity** technicals on the *underlying*. They do not model implied volatility, Greeks, or theta decay. The gate bounds capital-at-risk, not options-specific risk quality — use conservative premium caps and prefer defined-risk structures.
+
+## ⏱️ Swing-Trading Cadence (How Often To Run)
+
+This is a **daily-bar swing** system, so signals only change once per day when the daily candle closes:
+
+- **Run once per day, at/just after the US close (16:00 ET)** — the daily bar is final and every indicator is stable. This is the primary signal + entry run.
+- **Optionally once near the open (~09:30–10:00 ET)** for risk management only (stops, gaps, trims) — not for fresh entries off an unfinished bar.
+- **More frequent intraday runs do not help swing trading** — the daily candle repaints intraday, so extra runs surface noise and encourage overtrading (curbed by `max_daily_trades`). True intraday trading is a different strategy needing intraday bars.
+
+**Rule of thumb:** 1×/day post-close to find/enter setups, at most 1 more near the open to manage risk. Let winners ride across days; exit on exhaustion, not on a timer.
