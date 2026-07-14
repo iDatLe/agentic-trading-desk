@@ -4,6 +4,8 @@ Personal trading desk for technical analysis and short-term portfolio management
 
 The ruling principle is: **the AI fetches data, computes deterministic indicators, and — on the Agentic (cash) account — decides and executes trades autonomously; the deterministic `risk_guard.py` gate bounds every order before it is placed.**
 
+> 🎯 **Universe: SPY only.** This agent trades **strictly SPY** (SPY shares and SPY options). The risk gate's `allowed_symbols` is `["SPY"]` and rejects any order for another symbol. The Macro-Sentiment pillar still reads the broader ETF complex (SPY/RSP/IWM/HYG/LQD/TLT/XLY/XLP) as analysis input only — never as orders.
+
 > ⚠️ **Autonomous trading — real money, real risk.** This configuration lets the agent place live Robinhood orders on the Agentic account **without asking you to confirm each trade**. Losses can be rapid and are irreversible. Autonomy is bounded by the deterministic risk gate (position/size caps, daily-trade budget, settled-cash/T+1 rules, protected positions) and a master kill switch (`config.enabled=false` in `risk_guard.py`). Set conservative limits, keep the kill switch handy, and review the audit log regularly. The Individual (margin) account is never auto-traded.
 
 ---
@@ -231,12 +233,13 @@ The risk gate also bounds **options** orders via `proposal.asset_class = "option
 
 ```json
 {
-  "proposal": {"symbol": "AAPL", "asset_class": "option", "action": "buy_to_open",
-               "option_type": "call", "strike": 210, "premium": 4.50,
+  "proposal": {"symbol": "SPY", "asset_class": "option", "action": "buy_to_open",
+               "option_type": "call", "strike": 460, "premium": 4.50,
                "expiration": "2026-09-18", "today": "2026-07-14", "contracts": 5},
   "account": {"portfolio_value": 50000, "settled_cash": 8000, "positions": {}},
-  "config": {"max_trade_pct": 0.10, "max_option_premium_pct": 0.05,
-             "min_days_to_expiry": 21, "allow_uncovered_options": false}
+  "config": {"allowed_symbols": ["SPY"], "max_trade_pct": 0.10,
+             "max_option_premium_pct": 0.05, "min_days_to_expiry": 21,
+             "allow_uncovered_options": false}
 }
 ```
 

@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
     "min_cash_reserve": 0.0,         # settled cash kept untouched on buys
     "require_settled_cash": True,    # buys funded only by settled cash (cash acct / T+1)
     "allow_fractional": False,       # equity: whole shares only when False
+    "allowed_symbols": ["SPY"],      # trading universe allowlist; [] = unrestricted
     "protected": [],                 # symbols that must never be sold/trimmed
     # --- options / swing ---
     "max_option_premium_pct": 0.05,  # max premium-at-risk in ONE option position
@@ -116,6 +117,12 @@ def _common_precheck(proposal: dict, cfg: dict) -> Optional[dict]:
     if not cfg["enabled"]:
         return _reject(symbol, side, 0.0,
                        ["autonomous trading disabled (config.enabled=false) — kill switch active"],
+                       unit="")
+    allowed = [str(s).upper() for s in (cfg.get("allowed_symbols") or [])]
+    if allowed and symbol not in allowed:
+        return _reject(symbol, side, 0.0,
+                       [f"{symbol} not in trading universe (allowed_symbols="
+                        f"{allowed}); this agent trades strictly {'/'.join(allowed)}"],
                        unit="")
     if _num(cfg["daily_trades_used"]) >= _num(cfg["max_daily_trades"]):
         return _reject(symbol, side, 0.0,
@@ -452,53 +459,53 @@ def render(r: dict) -> str:
 
 def _selftest() -> int:
     scenarios = {
-        "EQUITY buy clamped by per-trade cap": {
-            "proposal": {"symbol": "AAPL", "side": "buy", "price": 200.0, "quantity": 100},
+        "NON-SPY rejected (strictly SPY universe)": {
+            "proposal": {"symbol": "AAPL", "side": "buy", "price": 200.0, "quantity": 10},
+            "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
+            "config": {},
+        },
+        "SPY buy clamped by per-trade cap": {
+            "proposal": {"symbol": "SPY", "side": "buy", "price": 450.0, "quantity": 100},
             "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
             "config": {"max_trade_pct": 0.10, "max_position_pct": 0.15},
         },
-        "EQUITY sell protected -> reject": {
-            "proposal": {"symbol": "MSFT", "side": "sell", "price": 400.0, "quantity": 5},
+        "SPY sell clamped to held": {
+            "proposal": {"symbol": "SPY", "side": "sell", "price": 450.0, "quantity": 50},
             "account": {"portfolio_value": 50000,
-                        "positions": {"MSFT": {"quantity": 20, "market_value": 8000}}},
-            "config": {"protected": ["MSFT"]},
+                        "positions": {"SPY": {"quantity": 12, "market_value": 5400}}},
+            "config": {},
         },
-        "EQUITY concurrency cap reached": {
-            "proposal": {"symbol": "NFLX", "side": "buy", "price": 600.0, "quantity": 1},
-            "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
-            "config": {"max_concurrent_positions": 5, "open_positions_count": 5},
-        },
-        "OPTION long call clamped by premium cap": {
-            "proposal": {"symbol": "AAPL", "asset_class": "option", "action": "buy_to_open",
-                         "option_type": "call", "strike": 210, "premium": 4.50,
+        "SPY option long call clamped by premium cap": {
+            "proposal": {"symbol": "SPY", "asset_class": "option", "action": "buy_to_open",
+                         "option_type": "call", "strike": 460, "premium": 4.50,
                          "expiration": "2026-09-18", "today": "2026-07-14", "contracts": 20},
             "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
             "config": {"max_option_premium_pct": 0.05, "min_days_to_expiry": 21},
         },
-        "OPTION too close to expiry for swing": {
-            "proposal": {"symbol": "TSLA", "asset_class": "option", "action": "buy_to_open",
-                         "option_type": "put", "strike": 240, "premium": 3.0,
+        "SPY option too close to expiry for swing": {
+            "proposal": {"symbol": "SPY", "asset_class": "option", "action": "buy_to_open",
+                         "option_type": "put", "strike": 440, "premium": 3.0,
                          "expiration": "2026-07-18", "today": "2026-07-14", "contracts": 3},
             "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
             "config": {"min_days_to_expiry": 21},
         },
-        "OPTION naked short blocked by default": {
+        "SPY naked short blocked by default": {
             "proposal": {"symbol": "SPY", "asset_class": "option", "action": "sell_to_open",
                          "option_type": "put", "strike": 430, "premium": 5.0,
                          "expiration": "2026-08-15", "today": "2026-07-14", "contracts": 2},
             "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
             "config": {},
         },
-        "OPTION defined-risk short spread (enabled + max_loss)": {
+        "SPY defined-risk short spread (enabled + max_loss)": {
             "proposal": {"symbol": "SPY", "asset_class": "option", "action": "sell_to_open",
                          "option_type": "put", "strike": 430, "premium": 5.0, "max_loss": 3000,
                          "expiration": "2026-08-15", "today": "2026-07-14", "contracts": 2},
             "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
             "config": {"allow_uncovered_options": True, "max_trade_pct": 0.10},
         },
-        "OPTION close reduces exposure": {
-            "proposal": {"symbol": "AAPL", "asset_class": "option", "action": "sell_to_close",
-                         "option_type": "call", "strike": 210, "premium": 6.0, "held_contracts": 4,
+        "SPY option close reduces exposure": {
+            "proposal": {"symbol": "SPY", "asset_class": "option", "action": "sell_to_close",
+                         "option_type": "call", "strike": 460, "premium": 6.0, "held_contracts": 4,
                          "expiration": "2026-09-18", "today": "2026-07-14", "contracts": 10},
             "account": {"portfolio_value": 50000, "settled_cash": 20000, "positions": {}},
             "config": {},

@@ -8,12 +8,13 @@ description: >-
   the macro regime, or manage the Agentic account — even if he doesn't
   explicitly name the skill. Compute all indicators using deterministic code
   (never by eye) from raw Robinhood bars, apply the exit-on-exhaustion /
-  re-enter-on-rebound logic, and respect account guardrails. On the Agentic
-  (cash) account, execute equity and options trades autonomously (no per-order
-  confirmation), but only after every proposed order passes the deterministic
-  `risk_guard.py` gate. This is a daily-bar SWING system: run once per day after
-  the close (optionally once near the open for risk management); do not overtrade
-  intraday. Options are defined-risk only by default (no naked shorts).
+  re-enter-on-rebound logic, and respect account guardrails. This agent trades
+  STRICTLY SPY (S&P 500 ETF) — SPY shares and SPY options only; the risk gate
+  rejects any other symbol. On the Agentic (cash) account, execute autonomously
+  (no per-order confirmation), but only after every proposed order passes the
+  deterministic `risk_guard.py` gate. This is a daily-bar SWING system: run once
+  per day after the close (optionally once near the open for risk management); do
+  not overtrade intraday. Options are defined-risk only by default (no naked shorts).
 ---
 
 # Agentic Trading Desk
@@ -23,6 +24,7 @@ Operations manual for short-term trading analysis and **autonomous** execution.
 
 ## Guardrails — Read First, Non-Negotiable
 
+0. **Universe = SPY only.** This agent trades **strictly SPY** (SPY shares and SPY options). `risk_guard.py`'s `config.allowed_symbols` is `["SPY"]` and the gate REJECTS any order for another symbol. I never place orders in any other ticker. (The Macro-Sentiment pillar still *reads* other ETFs — SPY/RSP/IWM/HYG/LQD/TLT/XLY/XLP — as analysis inputs only; that is data, never orders.)
 1. **Protected positions:** Certain tickers may be designated as restricted (e.g., stock grants). NEVER analyze them to sell or trim, nor include them in exit decisions. They are listed in `risk_guard.py`'s `config.protected` and the gate hard-rejects any sell of them. They should only be mentioned as exposure context if relevant.
 2. **Two accounts, two roles:**
    - **Agentic** (cash account) → short-term trading; I execute **autonomously** here (no per-order confirmation), always bounded by `risk_guard.py`.
@@ -42,10 +44,11 @@ Operations manual for short-term trading analysis and **autonomous** execution.
 
 Load the tools with `tool_search` before using them (they are deferred).
 
-**To analyze a ticker:**
-1. `Robinhood:get_equity_historicals` → ~290 daily bars (closes). This is the input for `indicators.py`. Request a range that yields ≥220 bars (ideal for EMA200).
-2. `Robinhood:get_equity_quotes` → live price / last session close.
-3. If the user has a position: `Robinhood:get_equity_positions` (correct account) for size and P&L → set `holding` to correct value in scoring.
+**To analyze SPY (the only traded symbol):**
+1. `Robinhood:get_equity_historicals` for **SPY** → ~290 daily bars (closes). This is the input for `indicators.py`. Request a range that yields ≥220 bars (ideal for EMA200).
+2. `Robinhood:get_equity_quotes` for SPY → live price / last session close.
+3. `Robinhood:get_equity_positions` (Agentic account) → current SPY size and P&L → set `holding` accordingly in scoring.
+   (Analyzing other tickers for context is allowed, but orders are SPY-only — the gate enforces this.)
 
 **For the Macro-Sentiment pilar (once per session, shared):**
 1. `get_equity_historicals` for the 7 ETFs: SPY, RSP, IWM, HYG, LQD, TLT, XLY, XLP.
@@ -81,13 +84,14 @@ python3 risk_guard.py order.json --json
 where `order.json` is:
 ```json
 {
-  "proposal": {"symbol": "AAPL", "side": "buy", "price": 220.5, "quantity": 10},
+  "proposal": {"symbol": "SPY", "side": "buy", "price": 450.0, "quantity": 10},
   "account": {"portfolio_value": 50000, "settled_cash": 8000,
-              "positions": {"AAPL": {"quantity": 5, "market_value": 1100}}},
-  "config": {"enabled": true, "max_position_pct": 0.15, "max_trade_pct": 0.10,
+              "positions": {"SPY": {"quantity": 5, "market_value": 2250}}},
+  "config": {"enabled": true, "allowed_symbols": ["SPY"],
+             "max_position_pct": 0.15, "max_trade_pct": 0.10,
              "max_daily_trades": 10, "daily_trades_used": 3,
              "min_cash_reserve": 0, "require_settled_cash": true,
-             "allow_fractional": false, "protected": ["MSFT"]}
+             "allow_fractional": false, "protected": []}
 }
 ```
 The gate returns `APPROVE`/`REJECT`, the size it clamped to (`approved.quantity`), and the reasons. Exit code is `0` on APPROVE and `2` on REJECT. I place the order only on APPROVE, sized to `approved.quantity`, via `review_*_order` → `place_*_order`. The `enabled` flag is the master kill switch.
@@ -95,12 +99,13 @@ The gate returns `APPROVE`/`REJECT`, the size it clamped to (`approved.quantity`
 **Options orders** use the same gate with `asset_class: "option"`:
 ```json
 {
-  "proposal": {"symbol": "AAPL", "asset_class": "option", "action": "buy_to_open",
-               "option_type": "call", "strike": 210, "premium": 4.50,
+  "proposal": {"symbol": "SPY", "asset_class": "option", "action": "buy_to_open",
+               "option_type": "call", "strike": 460, "premium": 4.50,
                "expiration": "2026-09-18", "today": "2026-07-14", "contracts": 5},
   "account": {"portfolio_value": 50000, "settled_cash": 8000, "positions": {}},
-  "config": {"enabled": true, "max_trade_pct": 0.10, "max_option_premium_pct": 0.05,
-             "min_days_to_expiry": 21, "allow_uncovered_options": false,
+  "config": {"enabled": true, "allowed_symbols": ["SPY"], "max_trade_pct": 0.10,
+             "max_option_premium_pct": 0.05, "min_days_to_expiry": 21,
+             "allow_uncovered_options": false,
              "max_concurrent_positions": 6, "open_positions_count": 2}
 }
 ```
