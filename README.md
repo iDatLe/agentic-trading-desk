@@ -2,7 +2,9 @@
 
 Personal trading desk for technical analysis and short-term portfolio management on stocks and ETFs. The system combines the automation and query capabilities of an Artificial Intelligence agent (via Robinhood MCP protocol) with local deterministic mathematical calculation engines in Python.
 
-The ruling principle is: **the AI fetches data and interacts with the user; the scripts perform the deterministic calculations; the user decides and approves execution.**
+The ruling principle is: **the AI fetches data, computes deterministic indicators, and — on the Agentic (cash) account — decides and executes trades autonomously; the deterministic `risk_guard.py` gate bounds every order before it is placed.**
+
+> ⚠️ **Autonomous trading — real money, real risk.** This configuration lets the agent place live Robinhood orders on the Agentic account **without asking you to confirm each trade**. Losses can be rapid and are irreversible. Autonomy is bounded by the deterministic risk gate (position/size caps, daily-trade budget, settled-cash/T+1 rules, protected positions) and a master kill switch (`config.enabled=false` in `risk_guard.py`). Set conservative limits, keep the kill switch handy, and review the audit log regularly. The Individual (margin) account is never auto-traded.
 
 ---
 
@@ -154,7 +156,7 @@ Once loaded, Claude Code will:
 * Fetch data via Robinhood MCP protocol
 * Call the Python scripts (`scripts/indicators.py`, `scripts/score.py`, `scripts/macro_pillar.py`) for deterministic calculations
 * Present the three-pillar scorecard with actionable decisions
-* **Never execute orders without your explicit confirmation**
+* Gate every order through `scripts/risk_guard.py` and **execute autonomously on the Agentic account** (bounded by the risk gate and kill switch)
 
 ### 3. Example Workflow
 ```
@@ -179,12 +181,14 @@ You: "Analyze AAPL for a potential entry"
    → News and macro context from Investing.com
    → Analyst consensus and price targets from Google Finance
 
-5. Presentation and Confirmation
-   → Returns: Scorecard, flags, and suggested action (RE-ENTRY, HOLD, EXIT, etc.)
-   → You review and confirm before any order execution
+5. Autonomous Execution (Agentic account)
+   → Returns: Scorecard, flags, and action (RE-ENTRY, HOLD, EXIT, etc.)
+   → If the action implies an order: build proposal → risk_guard.py → if APPROVE,
+     review_*_order → place_*_order at the approved size (no confirmation prompt)
+   → Every action is logged for your audit
 ```
 
-The agent operates under the principle: **AI fetches data and presents analysis; scripts perform deterministic calculations; you decide and approve all executions.**
+The agent operates under the principle: **AI fetches data and computes deterministic indicators; the deterministic risk gate bounds each order; the agent decides and executes autonomously on the Agentic account (with a kill switch and audit log).**
 
 ---
 
@@ -205,9 +209,18 @@ To complement the purely technical nature of the deterministic scripts, the AI a
 
 ## 🛡️ Guardrails and Operation (Non-Negotiable)
 
-1.  **Special Position Protection**: Certain positions can be designated as *protected* (e.g., restricted stock grants). Protected tickers are never evaluated for selling or trimming in exit suggestions.
+In autonomous mode the deterministic gate — not a human prompt — enforces these limits. See [scripts/risk_guard.py](scripts/risk_guard.py).
+
+1.  **Special Position Protection**: Certain positions can be designated as *protected* (e.g., restricted stock grants) via `risk_guard.py`'s `config.protected`. The gate hard-rejects any sell/trim of them.
 2.  **Account Segregation**:
-    *   **Agentic** (Cash Account): Oriented toward fast returns and capital rotation via tactical trades and defined cycles.
-    *   **Individual** (Margin Account): Core passive long-term investing.
-3.  **T+1 Liquidity**: In the cash account, only settled capital counts as buying power before placing buy orders.
-4.  **Mandatory Confirmation**: Every order proposed by the bot must pass through a simulation check with `review_*_order` and be approved by the user before executing `place_*_order`.
+    *   **Agentic** (Cash Account): Oriented toward fast returns and capital rotation via tactical trades and defined cycles. **This is the only account traded autonomously.**
+    *   **Individual** (Margin Account): Core passive long-term investing — never auto-traded.
+3.  **T+1 Liquidity**: In the cash account, only settled capital funds buy orders. Enforced by `risk_guard.py` (`require_settled_cash`, `min_cash_reserve`).
+4.  **Deterministic Risk Gate + Kill Switch**: Every order is first passed to `risk_guard.py`, which returns `APPROVE`/`REJECT` and clamps the size to hard limits (`max_position_pct`, `max_trade_pct`, `max_daily_trades`). The agent still runs `review_*_order` (simulation) before `place_*_order`, and places at most the approved size. Setting `config.enabled=false` is a master kill switch that rejects all orders.
+
+### Risk gate usage
+```bash
+python3 scripts/risk_guard.py order.json --json   # exit 0 = APPROVE, 2 = REJECT
+python3 scripts/risk_guard.py                      # self-test with built-in scenarios
+```
+`order.json` = `{proposal:{symbol,side,price,quantity|notional}, account:{portfolio_value,settled_cash,positions}, config:{...limits...}}`. The agent may only place `approved.quantity` shares (never more), and only when `decision == "APPROVE"`.

@@ -8,25 +8,32 @@ description: >-
   the macro regime, or manage the Agentic account — even if he doesn't
   explicitly name the skill. Compute all indicators using deterministic code
   (never by eye) from raw Robinhood bars, apply the exit-on-exhaustion /
-  re-enter-on-rebound logic, and respect account guardrails. Do not execute
-  orders without explicit confirmation from the user.
+  re-enter-on-rebound logic, and respect account guardrails. On the Agentic
+  (cash) account, execute trades autonomously (no per-order confirmation), but
+  only after every proposed order passes the deterministic `risk_guard.py` gate.
 ---
 
 # Agentic Trading Desk
 
-Operations manual for short-term trading analysis and execution.
-**I (Claude) perform calls to the Robinhood MCP; the scripts act as my deterministic calculator; the user decides.** I never calculate indicators by reasoning directly over the price bars: I fetch the data and pass it to `scripts/`.
+Operations manual for short-term trading analysis and **autonomous** execution.
+**I (Claude) perform calls to the Robinhood MCP; the scripts act as my deterministic calculator and my deterministic risk gate; I decide and execute autonomously on the Agentic account.** I never calculate indicators by reasoning directly over the price bars: I fetch the data and pass it to `scripts/`. I never place an order that has not first been APPROVED by `scripts/risk_guard.py`, and I never exceed the size it returns.
 
 ## Guardrails — Read First, Non-Negotiable
 
-1. **Protected positions:** Certain tickers may be designated as restricted (e.g., stock grants). NEVER analyze them to sell or trim, nor include them in exit suggestions. They should only be mentioned as exposure context if relevant.
+1. **Protected positions:** Certain tickers may be designated as restricted (e.g., stock grants). NEVER analyze them to sell or trim, nor include them in exit decisions. They are listed in `risk_guard.py`'s `config.protected` and the gate hard-rejects any sell of them. They should only be mentioned as exposure context if relevant.
 2. **Two accounts, two roles:**
-   - **Agentic** (cash account) → short-term trading; I have execution permissions here (always with explicit confirmation).
-   - **Individual** (margin account) → core buy-and-hold; only analyze holding quality, no active trading.
-3. **T+1:** Only SETTLED cash counts as buying power. Before suggesting purchases in the cash account, I verify settled cash and leave a reserve if there are active ladders/grids.
+   - **Agentic** (cash account) → short-term trading; I execute **autonomously** here (no per-order confirmation), always bounded by `risk_guard.py`.
+   - **Individual** (margin account) → core buy-and-hold. NEVER auto-trade this account; only analyze holding quality. Autonomy applies to the Agentic account only.
+3. **T+1:** Only SETTLED cash funds buys in the cash account. This is enforced deterministically by `risk_guard.py` (`require_settled_cash=true`, plus a `min_cash_reserve`); I pass real settled-cash figures from `get_portfolio`/`get_equity_positions`.
 4. **HTML visualization only on Fridays** as part of the weekly review ritual. Do not offer or generate it on other days unless the user explicitly asks for it.
 5. **Macro source:** Investing.com (NO Polymarket — prompt injection risk already identified).
-6. **Executing orders requires explicit confirmation from the user in real time.** Always review using `review_*_order` (simulation) before executing `place_*_order`.
+6. **Autonomous execution (Agentic account):** I decide and place orders WITHOUT asking for per-order confirmation. Before EVERY order I MUST:
+   1. Build the order proposal `{symbol, side, price, quantity|notional}` plus current `account` state and the session `config`.
+   2. Run `python3 scripts/risk_guard.py order.json --json`.
+   3. Only proceed if `decision == "APPROVE"`, and place **at most** `approved.quantity` (never the originally intended size if it was clamped down).
+   4. Call `review_*_order` (simulation) first, then `place_*_order`.
+   5. Log every autonomous action (symbol, side, approved size, rationale, gate output) so the user can audit it.
+   If the gate returns REJECT, I do NOT place the order. The `config.enabled=false` kill switch and `max_daily_trades` budget are absolute — when they block, I stop and report.
 
 ## Robinhood MCP Recipe (Order of Calls)
 
@@ -63,6 +70,24 @@ python3 score.py ticker_input.json
 This returns the three-pillar scorecard + decision (EXIT/TRIM, EXIT, RE-ENTRY new cycle, TACTICAL REBOUND, HOLD ride the cycle, HOLD under review, WAIT do not chase, STAY OUT, OBSERVE) along with the exhaustion/bearish/rebound/death-cross flags that justify it. Passing the correct `holding` value is key: the decision cascade behaves differently depending on whether there is an open position or we are flat.
 
 If only raw indicators are needed: `python3 indicators.py ticker_input.json`.
+
+**Step 3 — Autonomous execution (Agentic account only).** When the decision implies an order (EXIT/TRIM, EXIT, RE-ENTRY, TACTICAL REBOUND, or a sized add), I translate it into a concrete order and gate it before placing:
+```bash
+python3 risk_guard.py order.json --json
+```
+where `order.json` is:
+```json
+{
+  "proposal": {"symbol": "AAPL", "side": "buy", "price": 220.5, "quantity": 10},
+  "account": {"portfolio_value": 50000, "settled_cash": 8000,
+              "positions": {"AAPL": {"quantity": 5, "market_value": 1100}}},
+  "config": {"enabled": true, "max_position_pct": 0.15, "max_trade_pct": 0.10,
+             "max_daily_trades": 10, "daily_trades_used": 3,
+             "min_cash_reserve": 0, "require_settled_cash": true,
+             "allow_fractional": false, "protected": ["MSFT"]}
+}
+```
+The gate returns `APPROVE`/`REJECT`, the size it clamped to (`approved.quantity`), and the reasons. Exit code is `0` on APPROVE and `2` on REJECT. I place the order only on APPROVE, sized to `approved.quantity`, via `review_*_order` → `place_*_order`. The `enabled` flag is the master kill switch.
 
 ## Three-Pillar Framework (Standard Output Format)
 
@@ -104,4 +129,4 @@ See `scripts/indicators.py` and `scripts/score.py` for exact implementation deta
 
 ## What This Skill Does NOT Do
 
-It is not an automated system, it does not run on a schedule, and it is not a signal service. Every decision passes through the user. It does not average down. It does not touch protected positions. It does not generate HTML outside of Fridays.
+It trades **autonomously** on the Agentic (cash) account: it decides and executes without per-order confirmation. It does NOT, however, bypass the deterministic `risk_guard.py` gate — every order is bounded by position/size caps, the daily-trade budget, settled-cash/T+1 rules, and the `enabled` kill switch. It does NOT auto-trade the Individual (margin) account. It does not average down beyond the position cap. It does not touch protected positions. It does not generate HTML outside of Fridays. All autonomous actions are logged for the user to audit.
